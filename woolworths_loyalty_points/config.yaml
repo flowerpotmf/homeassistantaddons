@@ -1,0 +1,23 @@
+# Home Assistant Add-on: Woolworths Loyalty Points Automation
+name: "Woolworths Loyalty Points"
+description: "Automatically boost Woolworths loyalty points by activating offers"
+version: "1.0.0"
+slug: "woolworths_loyalty_points"
+init: false
+startup: application
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+options:
+  client_id: ""
+  hashcrn: ""
+  run_time: "09:00"
+  notification: true
+schema:
+  client_id: str
+  hashcrn: str
+  run_time: str
+  notification: bool
