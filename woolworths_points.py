@@ -62,7 +62,7 @@ def process_offers():
     }
     
     # Make GET request to fetch offers
-    offers_url = "https://prod.api-wr.com/wx/vl/csl/customers/offers"
+    offers_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers"
     try:
         logger.info("Fetching offers from Woolworths API")
         response = requests.get(offers_url, headers=headers)
