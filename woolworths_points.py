@@ -93,7 +93,7 @@ def process_offers():
                 continue
                 
             # Prepare the POST data
-            post_data = {'offerlds': [offer_id]}
+            post_data = {'offerIds': [offer_Id]}
             
             try:
                 logger.info(f"Attempting to boost offer ID: {offer_id}")
