@@ -13,22 +13,13 @@ NOTIFICATION=$(jq --raw-output '.notification' $CONFIG_PATH)
 export client_id=$CLIENT_ID
 export hashcrn=$HASHCRN
 export notification=$NOTIFICATION
+export run_time=$RUN_TIME
 
 echo "Woolworths Loyalty Points Add-on started"
 echo "Scheduled to run daily at $RUN_TIME"
 
-# Extract hours and minutes from RUN_TIME (format: HH:MM)
-HOUR=${RUN_TIME%:*}
-MINUTE=${RUN_TIME#*:}
+# Install schedule library if not already installed
+pip install schedule
 
-# Remove leading zeros from hour and minute
-HOUR=${HOUR#0}
-MINUTE=${MINUTE#0}
-
-# Schedule the cron job
-(crontab -l 2>/dev/null || echo "") | \
-    { cat; echo "$MINUTE $HOUR * * * /usr/local/bin/python /app/woolworths_points.py"; } | \
-    crontab -
-
-# Start cron
-crond -f -d 8
+# Run the Python script directly (no cron needed)
+exec python /app/woolworths_points.py
