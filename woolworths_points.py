@@ -84,7 +84,7 @@ def process_offers():
         logger.info(f"Not activated offers: {len(not_activated_offers)}")
         
         # Boost each not activated offer
-        boost_url = "https://prod.api-wr.com/wx/vl/csl/customers/offers/boost"
+        boost_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers/boost"
         boosted_count = 0
         
         for offer in not_activated_offers:
