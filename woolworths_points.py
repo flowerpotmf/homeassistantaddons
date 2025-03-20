@@ -108,7 +108,7 @@ def process_account(account):
                 time.sleep(1.5)  # Safer delay
 
             except Exception as e:
-                logger.error(f"Boost failed for {offer_id}: {str(e)}")
+                logger.error(f"Boost failed for offer_id: {offer_id}  Error: {str(e)}") #Added offer_id to error
 
         logger.info(f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers")
         return f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers"
