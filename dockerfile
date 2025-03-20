@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy script files
 COPY run.sh .
 COPY woolworths_points.py .
+COPY options.json .
 
 # Make scripts executable
 RUN chmod +x run.sh

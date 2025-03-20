@@ -11,12 +11,18 @@
     "client_id": "",
     "hashcrn": "",
     "run_time": "09:00",
-    "notification": true
+    "notification": true,
+    "x_api_key": "",
+    "x_wooliesx_api_key": "",
+    "account_name": "My Account"
   },
   "schema": {
     "client_id": "str",
     "hashcrn": "str",
     "run_time": "str",
-    "notification": "bool"
+    "notification": "bool",
+    "x_api_key": "str",
+    "x_wooliesx_api_key": "str",
+    "account_name": "str"
   }
 }

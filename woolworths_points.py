@@ -44,6 +44,8 @@ def process_account(account):
     client_id = account.get('client_id')
     hashcrn = account.get('hashcrn')
     account_name = account.get('name', 'Unnamed Account')
+    x_api_key = account.get('x_api_key')
+    x_wooliesx_api_key = account.get('x_wooliesx_api_key')
 
     logger.info(f"Processing account: {account_name}")
 
@@ -55,9 +57,9 @@ def process_account(account):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
         'client_id': client_id,
         'hashcrn': hashcrn,
-        'x-api-key': os.environ.get('x_api_key'),
-        'x-wooliesx-api-key': os.environ.get('x_wooliesx_api_key'),
-        'userlocaltime': '480',  # Critical value from your network logs
+        'x-api-key': x_api_key,
+        'x-wooliesx-api-key': x_wooliesx_api_key,
+        'userlocaltime': '480',
         'sec-ch-ua': '"Chromium";v="134", "Not:A-Brand";v="24", "Brave";v="134"',
         'sec-ch-ua-platform': '"Windows"',
         'priority': 'u=1, i',
@@ -108,8 +110,7 @@ def process_account(account):
                 time.sleep(1.5)  # Safer delay
 
             except Exception as e:
-                logger.error(f"Boost failed for offer_id: {offer_id}  Error: {str(e)}") #Added offer_id to error
-
+                logger.error(f"Boost failed for offer_id: {offer_id}  Error: {str(e)}")
         logger.info(f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers")
         return f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers"
 
@@ -126,11 +127,13 @@ def main():
     logger.info(f"Woolworths Loyalty Points Add-on started")
     logger.info(f"Scheduled to run daily at {run_time}")
 
-    # Get account details from environment variables
+    # Get account details from environment variables and config
     account = {
         'client_id': os.environ.get('client_id'),
         'hashcrn': os.environ.get('hashcrn'),
-        'name': os.environ.get('account_name', 'My Account')  # Added account name
+        'name': os.environ.get('account_name', 'My Account'),
+        'x_api_key': os.environ.get('x_api_key'), # added
+        'x_wooliesx_api_key': os.environ.get('x_wooliesx_api_key') # added
     }
 
     if not account['client_id']:
@@ -141,18 +144,28 @@ def main():
     
     # Schedule the job
     def scheduled_job():
-        result = process_account(account) # call process_account
+        logger.info("scheduled_job() is being called")
+        result = process_account(account)
         send_notification(result)
 
     schedule.every().day.at(run_time).do(scheduled_job)
     
-    # Also run once at startup if needed
-    # scheduled_job()
-    
     # Keep the script running
     while True:
         schedule.run_pending()
-        time.sleep(60)  # Check every minute
+        time.sleep(60)
 
+    # 1. Verify Environment Variables:
+    logger.info(f"client_id: {os.environ.get('client_id')}")
+    logger.info(f"hashcrn: {os.environ.get('hashcrn')}")
+    logger.info(f"x_api_key: {os.environ.get('x_api_key')}")
+    logger.info(f"x_wooliesx_api_key: {os.environ.get('x_wooliesx_api_key')}")
+    logger.info(f"run_time: {os.environ.get('run_time')}")
+    logger.info(f"notification: {os.environ.get('notification')}")
+    logger.info(f"account_name: {os.environ.get('account_name')}")
+
+    # 4. Check Python Path:
+    logger.info(f"Python executable: {sys.executable}")
+    
 if __name__ == "__main__":
     main()

@@ -2,5 +2,8 @@
   "client_id": "your-client-id",
   "hashcrn": "your-hashcrn",
   "run_time": "09:00",
-  "notification": true
+  "notification": true,
+  "x_api_key": "YOUR_X_API_KEY",
+  "x_wooliesx_api_key": "YOUR_X_WOOLIESX_API_KEY",
+  "account_name": "My Account"
 }
