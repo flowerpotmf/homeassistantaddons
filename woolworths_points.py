@@ -39,94 +39,85 @@ def send_notification(message):
     except Exception as e:
         logger.error(f"Failed to send notification: {e}")
 
-def process_offers():
-    """Main function to process and boost Woolworths offers"""
-    logger.info("Starting Woolworths Loyalty Points boost process")
-    
-    # Get credentials from environment variables
-    client_id = os.environ.get('client_id')
-    hashcrn = os.environ.get('hashcrn')
-    
-    if not client_id:
-        error_msg = "Error: 'client_id' not found in environment variables"
-        logger.error(error_msg)
-        send_notification(error_msg)
-        return
-    
-    # Set up headers for the request
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+def process_account(account):
+    """Process offers for a single account"""
+    client_id = account.get('client_id')
+    hashcrn = account.get('hashcrn')
+    account_name = account.get('name', 'Unnamed Account')
+
+    logger.info(f"Processing account: {account_name}")
+
+    # Create a persistent session for cookies/headers
+    session = requests.Session()
+
+    # Set base headers (observed from network tab)
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
         'client_id': client_id,
-        'hashcrn': hashcrn or "",
+        'hashcrn': hashcrn,
+        'x-api-key': os.environ.get('x_api_key'),
+        'x-wooliesx-api-key': os.environ.get('x_wooliesx_api_key'),
+        'userlocaltime': '480',  # Critical value from your network logs
+        'sec-ch-ua': '"Chromium";v="134", "Not:A-Brand";v="24", "Brave";v="134"',
+        'sec-ch-ua-platform': '"Windows"',
+        'priority': 'u=1, i',
         'content-type': 'application/json'
-    }
-    
-    # Make GET request to fetch offers
-    offers_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers"
+    })
+
     try:
-        logger.info("Fetching offers from Woolworths API")
-        response = requests.get(offers_url, headers=headers)
+        # Fetch offers with session
+        offers_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers"
+        response = session.get(offers_url)
         response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Error fetching offers: {e}"
-        logger.error(error_msg)
-        send_notification(error_msg)
-        return
-    
-    # Process the response data
-    try:
+
+        # Process offers
         data = response.json()
         offers = data.get('offers', [])
-        logger.info(f"Total offers found: {len(offers)}")
-        
-        # Filter offers with "NotActivated" status
         not_activated_offers = [offer for offer in offers if offer.get('status') == "NotActivated"]
-        logger.info(f"Not activated offers: {len(not_activated_offers)}")
         
-        # Boost each not activated offer
+        # Boost offers
         boost_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers/boost"
         boosted_count = 0
-        
+
         for offer in not_activated_offers:
             offer_id = offer.get('id')
             if not offer_id:
                 continue
-                
-            # Prepare the POST data
-            post_data = {'offerIds': [offer_id]}
-            
+
             try:
-                logger.info(f"Attempting to boost offer ID: {offer_id}")
-                boost_response = requests.post(
+                # Add POST-specific headers (from network inspection)
+                boost_headers = {
+                    'origin': 'https://www.woolworths.com.au',
+                    'referer': 'https://www.woolworths.com.au/'
+                }
+                
+                boost_response = session.post(
                     boost_url,
-                    headers=headers,
-                    data=json.dumps(post_data)
+                    json={'offerIds': [offer_id]},
+                    headers=boost_headers
                 )
                 boost_response.raise_for_status()
                 
-                # Check if boost was successful
-                if boost_response.status_code == 200:
+                # Check for success in response body
+                if boost_response.json().get('status') == 'Success':
                     boosted_count += 1
-                    logger.info(f"Successfully boosted offer ID: {offer_id}")
-                    
-                # Small delay to avoid API rate limiting
-                time.sleep(1)
-                    
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error boosting offer {offer_id}: {e}")
-        
-        result_msg = f"Successfully boosted {boosted_count} offers out of {len(not_activated_offers)} not activated offers"
-        logger.info(result_msg)
-        send_notification(result_msg)
-        
-    except json.JSONDecodeError:
-        error_msg = "Error: Could not parse JSON response"
+                    logger.info(f"Boosted offer {offer_id}")
+                else:
+                    logger.warning(f"Unexpected response for {offer_id}: {boost_response.text}")
+
+                time.sleep(1.5)  # Safer delay
+
+            except Exception as e:
+                logger.error(f"Boost failed for {offer_id}: {str(e)}")
+
+        logger.info(f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers")
+        return f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers"
+
+    except Exception as e:
+        error_msg = f"Account processing failed: {str(e)}"
         logger.error(error_msg)
-        send_notification(error_msg)
-    except KeyError as e:
-        error_msg = f"Error: Missing expected key in response data: {e}"
-        logger.error(error_msg)
-        send_notification(error_msg)
+        send_notification(f"{account_name} error: {str(e)}")
+        return error_msg
 
 def main():
     """Initialize and run the scheduler"""
@@ -134,12 +125,29 @@ def main():
     
     logger.info(f"Woolworths Loyalty Points Add-on started")
     logger.info(f"Scheduled to run daily at {run_time}")
+
+    # Get account details from environment variables
+    account = {
+        'client_id': os.environ.get('client_id'),
+        'hashcrn': os.environ.get('hashcrn'),
+        'name': os.environ.get('account_name', 'My Account')  # Added account name
+    }
+
+    if not account['client_id']:
+        error_msg = "Error: 'client_id' not found in environment variables"
+        logger.error(error_msg)
+        send_notification(error_msg)
+        return
     
     # Schedule the job
-    schedule.every().day.at(run_time).do(process_offers)
+    def scheduled_job():
+        result = process_account(account) # call process_account
+        send_notification(result)
+
+    schedule.every().day.at(run_time).do(scheduled_job)
     
     # Also run once at startup if needed
-    # process_offers()
+    # scheduled_job()
     
     # Keep the script running
     while True:
