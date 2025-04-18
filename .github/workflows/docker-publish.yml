@@ -1,44 +1,58 @@
-name: Build & Publish Woolworths add‑on
+name: Build & Publish Woolworths Loyalty Points add‑on
 
+# ─── When to run ──────────────────────────────────────────────────────────────
 on:
   push:
     branches: [ main ]
     paths:
       - '.github/workflows/**'
       - 'woolworths_loyalty_points/**'
+  workflow_dispatch:          # allow manual trigger from the Actions tab
 
+# ─── Job definition ───────────────────────────────────────────────────────────
 jobs:
   docker:
     runs-on: ubuntu-latest
+
+    # Needed so the job can push to GHCR
     permissions:
       contents: read
       packages: write
 
     steps:
+    # 1 Checkout repository
     - uses: actions/checkout@v4
 
-    - name: Log in to GHCR
-      uses: docker/login-action@v3
+    # 2 (Optional) enable emulation so we can build ARM images on x86 runners
+    - uses: docker/setup-qemu-action@v3
+
+    # 3 Set up Buildx builder instance
+    - uses: docker/setup-buildx-action@v3
+
+    # 4 Log in to GitHub Container Registry
+    - uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.repository_owner }}
-        password: ${{ secrets.GHCR_PAT }}
+        password: ${{ secrets.GHCR_PAT }}    # PAT with packages:write scope
 
-    - uses: docker/setup-buildx-action@v3
-
-    - name: Build & push image
-      uses: docker/build-push-action@v5
+    # 5 Build and push the image
+    - uses: docker/build-push-action@v5
       with:
+        # Folder that contains the Dockerfile
         context: ./woolworths_loyalty_points
         file:   ./woolworths_loyalty_points/Dockerfile
-        push:   true
-        platforms: linux/amd64,linux/arm64,linux/arm/v7  # optional multi‑arch
-        provenance: false
+
+        # Platforms must match the 'arch' list in config.json
+        platforms: linux/amd64,linux/arm64,linux/arm/v7
+
+        push: true
+        provenance: false              # (temporary: avoids SBOM attestation bug)
+
         tags: |
           ghcr.io/${{ github.repository_owner }}/woolworths_loyalty_points:latest
           ghcr.io/${{ github.repository_owner }}/woolworths_loyalty_points:${{ github.sha }}
+
         labels: |
           org.opencontainers.image.source=https://github.com/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
-
-
