@@ -1,6 +1,6 @@
 {
   "name": "Woolworths Loyalty Points",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "slug": "woolworths_loyalty_points",
   "description": "Automatically boost Woolworths loyalty points by activating offers",
   "arch": ["aarch64", "amd64", "armhf", "armv7", "i386"],
