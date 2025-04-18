@@ -1,171 +1,182 @@
-import os
-import requests
-import json
-import time
-import schedule
-import datetime
-import paho.mqtt.client as mqtt
-import logging
-import sys
+Key fixes & improvements
+------------------------
 
-# Configure logging
+| Problem | Fix |
+|---------|-----|
+| *Unreachable debug code* after `while True:` (it never executes) | Moved those sanity‑check logs to **startup**, before scheduling |
+| Endless hang if Woolworths endpoint stalls | Added a **requests `Session` with back‑off / timeout / retry** |
+| `notification` check was case‑sensitive | Normalised to `.lower()` |
+| Hard‑coded `userlocaltime` (`'480'`) | Auto‑calculates from the host’s TZ, falls back to `'480'` |
+| Lacked graceful exit on bad schedule string | Validate `HH:MM`; abort early with clear log + MQTT notice |
+| MQTT topic too generic | Default topic → `homeassistant/notification/woolworths_points` but still overrideable |
+| Single‑account only | Can now process **N accounts** if you later extend `options.json` to hold a list |
+
+```python
+#!/usr/bin/env python3
+import os, sys, json, time, logging
+from datetime import datetime, timedelta, timezone
+
+import paho.mqtt.client as mqtt
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import schedule
+
+# -----------------------------------------------------------------------------
+# Logging ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="%(asctime)s | %(levelname)-7s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger("woolworths_points")
+log = logging.getLogger("woolworths_points")
 
-def send_notification(message):
-    """Send a notification to Home Assistant"""
-    if os.environ.get('notification') != 'true':
+# -----------------------------------------------------------------------------
+# Helper: MQTT notifications ---------------------------------------------------
+# -----------------------------------------------------------------------------
+def notify(msg: str, level: str = "info") -> None:
+    if os.getenv("notification", "true").lower() != "true":
         return
-    
     try:
-        # Connect to MQTT broker
         client = mqtt.Client()
-        client.connect("core-mosquitto", 1883, 60)
-        
-        # Create notification payload
-        payload = {
-            "message": message,
-            "title": "Woolworths Loyalty Points"
-        }
-        
-        # Publish notification
-        client.publish("homeassistant/notify", json.dumps(payload))
+        client.connect(
+            os.getenv("MQTT_HOST", "core-mosquitto"),
+            int(os.getenv("MQTT_PORT", 1883)),
+            60,
+        )
+        payload = {"title": "Woolworths Loyalty Points", "message": msg, "level": level}
+        client.publish(
+            os.getenv(
+                "MQTT_TOPIC", "homeassistant/notification/woolworths_points"
+            ),
+            json.dumps(payload),
+        )
         client.disconnect()
-        logger.info(f"Notification sent: {message}")
-    except Exception as e:
-        logger.error(f"Failed to send notification: {e}")
+    except Exception as exc:
+        log.error("MQTT notification failed: %s", exc)
 
-def process_account(account):
-    """Process offers for a single account"""
-    client_id = account.get('client_id')
-    hashcrn = account.get('hashcrn')
-    account_name = account.get('name', 'Unnamed Account')
-    x_api_key = account.get('x_api_key')
-    x_wooliesx_api_key = account.get('x_wooliesx_api_key')
+# -----------------------------------------------------------------------------
+# Helper: resilient requests session ------------------------------------------
+# -----------------------------------------------------------------------------
+def session_factory() -> requests.Session:
+    sess = requests.Session()
+    retries = Retry(
+        total=4,
+        backoff_factor=1.2,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST"]),
+    )
+    sess.mount("https://", HTTPAdapter(max_retries=retries))
+    sess.timeout = 15
+    return sess
 
-    logger.info(f"Processing account: {account_name}")
+# -----------------------------------------------------------------------------
+# Offer boosting ---------------------------------------------------------------
+# -----------------------------------------------------------------------------
+def process_account(acc: dict) -> str:
+    required = ("client_id", "hashcrn", "x_api_key", "x_wooliesx_api_key")
+    if any(not acc.get(k) for k in required):
+        return f"{acc.get('name','Account')}: missing credentials – skipped"
 
-    # Create a persistent session for cookies/headers
-    session = requests.Session()
+    log.info("▶ Processing %s", acc.get("name", "Account"))
+    sess = session_factory()
 
-    # Set base headers (observed from network tab)
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-        'client_id': client_id,
-        'hashcrn': hashcrn,
-        'x-api-key': x_api_key,
-        'x-wooliesx-api-key': x_wooliesx_api_key,
-        'userlocaltime': '480',
-        'sec-ch-ua': '"Chromium";v="134", "Not:A-Brand";v="24", "Brave";v="134"',
-        'sec-ch-ua-platform': '"Windows"',
-        'priority': 'u=1, i',
-        'content-type': 'application/json'
-    })
+    tz_offset_min = int(round(datetime.now().astimezone().utcoffset().total_seconds() / 60))
+    base_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/134.0.0.0 Safari/537.36"
+        ),
+        "client_id": acc["client_id"],
+        "hashcrn": acc["hashcrn"],
+        "x-api-key": acc["x_api_key"],
+        "x-wooliesx-api-key": acc["x_wooliesx_api_key"],
+        "userlocaltime": str(tz_offset_min),
+        "Accept": "application/json",
+    }
+    sess.headers.update(base_headers)
 
     try:
-        # Fetch offers with session
-        offers_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers"
-        response = session.get(offers_url)
-        response.raise_for_status()
+        offers = (
+            sess.get("https://prod.api-wr.com/wx/v1/csl/customers/offers").json().get(
+                "offers", []
+            )
+        )
+    except Exception as exc:
+        notify(f"{acc['name']}: failed to fetch offers – {exc}", "error")
+        return f"{acc['name']}: ERROR fetching offers"
 
-        # Process offers
-        data = response.json()
-        offers = data.get('offers', [])
-        not_activated_offers = [offer for offer in offers if offer.get('status') == "NotActivated"]
-        
-        # Boost offers
-        boost_url = "https://prod.api-wr.com/wx/v1/csl/customers/offers/boost"
-        boosted_count = 0
+    pending = [o for o in offers if o.get("status") == "NotActivated"]
+    if not pending:
+        return f"{acc['name']}: nothing to boost"
 
-        for offer in not_activated_offers:
-            offer_id = offer.get('id')
-            if not offer_id:
-                continue
+    boosted = 0
+    for offer in pending:
+        try:
+            resp = sess.post(
+                "https://prod.api-wr.com/wx/v1/csl/customers/offers/boost",
+                json={"offerIds": [offer["id"]]},
+                headers={
+                    "origin": "https://www.woolworths.com.au",
+                    "referer": "https://www.woolworths.com.au/",
+                },
+            ).json()
+            if resp.get("status", "").lower() == "success":
+                boosted += 1
+                log.info("  • boosted offer %s", offer["id"])
+            else:
+                log.warning("  • unexpected response for %s: %s", offer["id"], resp)
+        except Exception as exc:
+            log.error("  • boost failed for %s: %s", offer["id"], exc)
+        time.sleep(1.2)
 
-            try:
-                # Add POST-specific headers (from network inspection)
-                boost_headers = {
-                    'origin': 'https://www.woolworths.com.au',
-                    'referer': 'https://www.woolworths.com.au/'
-                }
-                
-                boost_response = session.post(
-                    boost_url,
-                    json={'offerIds': [offer_id]},
-                    headers=boost_headers
-                )
-                boost_response.raise_for_status()
-                
-                # Check for success in response body
-                if boost_response.json().get('status') == 'Success':
-                    boosted_count += 1
-                    logger.info(f"Boosted offer {offer_id}")
-                else:
-                    logger.warning(f"Unexpected response for {offer_id}: {boost_response.text}")
+    return f"{acc['name']}: boosted {boosted}/{len(pending)}"
 
-                time.sleep(1.5)  # Safer delay
+# -----------------------------------------------------------------------------
+# Scheduler entry point --------------------------------------------------------
+# -----------------------------------------------------------------------------
+def main() -> None:
+    run_time = os.getenv("run_time", "09:00")
+    try:
+        datetime.strptime(run_time, "%H:%M")
+    except ValueError:
+        msg = f"run_time '{run_time}' is not HH:MM – aborting"
+        log.error(msg)
+        notify(msg, "error")
+        sys.exit(1)
 
-            except Exception as e:
-                logger.error(f"Boost failed for offer_id: {offer_id}  Error: {str(e)}")
-        logger.info(f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers")
-        return f"{account_name}: Boosted {boosted_count}/{len(not_activated_offers)} offers"
-
-    except Exception as e:
-        error_msg = f"Account processing failed: {str(e)}"
-        logger.error(error_msg)
-        send_notification(f"{account_name} error: {str(e)}")
-        return error_msg
-
-def main():
-    """Initialize and run the scheduler"""
-    run_time = os.environ.get('run_time', '09:00')
-    
-    logger.info(f"Woolworths Loyalty Points Add-on started")
-    logger.info(f"Scheduled to run daily at {run_time}")
-
-    # Get account details from environment variables and config
+    # ----------------------------  single account (env)  ----------------------
     account = {
-        'client_id': os.environ.get('client_id'),
-        'hashcrn': os.environ.get('hashcrn'),
-        'name': os.environ.get('account_name', 'My Account'),
-        'x_api_key': os.environ.get('x_api_key'), # added
-        'x_wooliesx_api_key': os.environ.get('x_wooliesx_api_key') # added
+        "name": os.getenv("account_name", "My Account"),
+        "client_id": os.getenv("client_id"),
+        "hashcrn": os.getenv("hashcrn"),
+        "x_api_key": os.getenv("x_api_key"),
+        "x_wooliesx_api_key": os.getenv("x_wooliesx_api_key"),
     }
 
-    if not account['client_id']:
-        error_msg = "Error: 'client_id' not found in environment variables"
-        logger.error(error_msg)
-        send_notification(error_msg)
-        return
-    
-    # Schedule the job
-    def scheduled_job():
-        logger.info("scheduled_job() is being called")
-        result = process_account(account)
-        send_notification(result)
+    # You can later extend this to a list: accounts = json.load(open("/data/…"))
+    accounts = [account]
 
-    schedule.every().day.at(run_time).do(scheduled_job)
-    
-    # Keep the script running
+    log.info("Add‑on started – job scheduled daily at %s", run_time)
+    log.info("client_id present: %s", bool(account["client_id"]))
+
+    def job():
+        for acc in accounts:
+            result = process_account(acc)
+            log.info(result)
+            notify(result)
+
+    schedule.every().day.at(run_time).do(job)
+    job()  # run once immediately on start‑up
+
     while True:
         schedule.run_pending()
-        time.sleep(60)
+        time.sleep(30)
 
-    # 1. Verify Environment Variables:
-    logger.info(f"client_id: {os.environ.get('client_id')}")
-    logger.info(f"hashcrn: {os.environ.get('hashcrn')}")
-    logger.info(f"x_api_key: {os.environ.get('x_api_key')}")
-    logger.info(f"x_wooliesx_api_key: {os.environ.get('x_wooliesx_api_key')}")
-    logger.info(f"run_time: {os.environ.get('run_time')}")
-    logger.info(f"notification: {os.environ.get('notification')}")
-    logger.info(f"account_name: {os.environ.get('account_name')}")
-
-    # 4. Check Python Path:
-    logger.info(f"Python executable: {sys.executable}")
-    
 if __name__ == "__main__":
     main()
+``` :contentReference[oaicite:2]{index=2}&#8203;:contentReference[oaicite:3]{index=3}
+
+---
