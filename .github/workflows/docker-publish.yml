@@ -2,7 +2,7 @@ name: Build & Push Add-on Image
 
 on:
   push:
-    branches: [main]        # You can also add: tags: ['v*']
+    branches: [main]
 
 jobs:
   docker:
@@ -10,7 +10,7 @@ jobs:
 
     permissions:
       contents: read
-      packages: write
+      packages: write  # ← grants GITHUB_TOKEN permission to push to GHCR
 
     steps:
     - name: Check out the code
@@ -37,3 +37,4 @@ jobs:
         labels: |
           org.opencontainers.image.source=https://github.com/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
+
